@@ -1,7 +1,7 @@
 #lang racket
 
 ;; ============================================================
-;; Recursive Descent Parser for the Simple Grammar
+;; Recursive Descent Parser for the Simple Language
 ;; Author: Jai Patel
 ;; ============================================================
 
@@ -13,50 +13,16 @@
 (define tokens '())
 (define current-line 1)
 
-;; Track whether a statement has ended (used for newline rule)
-(define last-token-ended-statement? #t)
-
-(define (tok-type t)
-  (if (list? t) (car t) t))
-
-(define (note-token-ending! tok)
-  (define t (tok-type tok))
-  (cond
-    ;; Tokens that clearly indicate continuation of an expression
-    [(member t '(PLUS MINUS MUL DIV COMP-OP ASSIGN LPAREN))
-     (set! last-token-ended-statement? #f)]
-    ;; Tokens that mark end of a logical expression or statement
-    [(member t '(ID NUM RPAREN END SEMI EOF THEN ELSE BEGIN PRINT READ WHILE IF))
-     (set! last-token-ended-statement? #t)]
-    [else
-     (set! last-token-ended-statement? #t)]))
-
 ;; -----------------------------
 ;; TOKENIZER
 ;; -----------------------------
 (define (tokenize input)
-  ;; reset state for each parse
-  (set! current-line 1)
-  (set! last-token-ended-statement? #t)
-
-  ;; whitespace skipper (now detects mid-expression newlines)
   (define (skip-space s)
-    (let loop ([str s])
-      (cond
-        [(regexp-match #px"^[ \t]+" str)
-         (loop (regexp-replace #px"^[ \t]+" str ""))]
+    ;; count newlines to update current-line
+    (define newline-matches (regexp-match* #px"(\r\n|\r|\n)" s))
+    (set! current-line (+ current-line (length newline-matches)))
+    (regexp-replace #px"^[ \t\r\n]+" s ""))
 
-        ;; newline handling: error if inside an expression
-        [(regexp-match #px"^\r?\n" str)
-         (if (not last-token-ended-statement?)
-             (error (format "Syntax error on line ~a: line break inside expression" current-line))
-             (begin
-               (set! current-line (add1 current-line))
-               (loop (regexp-replace #px"^\r?\n" str ""))))]
-
-        [else str])))
-
-  ;; remove /* ... */ comments, disallow nested or stray closers
   (define (skip-comments s)
     (cond
       [(regexp-match #px"^/\\*" s)
@@ -66,12 +32,9 @@
                   [end (cdr pair)]
                   [rest (substring s end)])
              (skip-comments rest))
-           (error (format "Unterminated comment near line ~a" current-line)))]
-      [(regexp-match #px"^\\*/" s)
-       (error (format "Syntax error: stray comment close '*/' (line ~a)" current-line))]
+           (error (format "Unterminated comment starting near line ~a" current-line)))]
       [else s]))
 
-  ;; recursively clean spaces and comments
   (define (clean s)
     (let loop ([str s])
       (define no-space (skip-space str))
@@ -80,7 +43,6 @@
           (loop no-comment)
           no-comment)))
 
-  ;; single token extraction
   (define (next-token s)
     (cond
       [(string=? s "") (values 'EOF "")]
@@ -94,29 +56,28 @@
       [(regexp-match #px"^read\\b" s) => (λ(_) (values 'READ (regexp-replace #px"^read\\b" s "")))]
       [(regexp-match #px"^print\\b" s) => (λ(_) (values 'PRINT (regexp-replace #px"^print\\b" s "")))]
 
-      ;; comparison operators
+      ;; compound operators
       [(regexp-match #px"^>=" s) => (λ(m) (values (list 'COMP-OP (car m)) (substring s (string-length (car m)))))]
       [(regexp-match #px"^<=" s) => (λ(m) (values (list 'COMP-OP (car m)) (substring s (string-length (car m)))))]
       [(regexp-match #px"^<>" s) => (λ(m) (values (list 'COMP-OP (car m)) (substring s (string-length (car m)))))]
       [(regexp-match #px"^=" s)  => (λ(m) (values (list 'COMP-OP (car m)) (substring s (string-length (car m)))))]
       [(regexp-match #px"^>" s)  => (λ(m) (values (list 'COMP-OP (car m)) (substring s (string-length (car m)))))]
       [(regexp-match #px"^<" s)  => (λ(m) (values (list 'COMP-OP (car m)) (substring s (string-length (car m)))))]
-      
+
       ;; assignment
       [(regexp-match #px"^:=" s) => (λ(_) (values 'ASSIGN (regexp-replace #px"^:=" s "")))]
 
-;; numbers (integer, float, or scientific notation)
-[(regexp-match #px"^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?" s)
- => (λ(m)
-      (values (list 'NUM (car m))
-              (substring s (string-length (car m)))))]
+      ;; numbers
+      [(regexp-match #px"^[+-]?[0-9]+(\\.[0-9]+)?" s)
+       => (λ(m) (values (list 'NUM (car m))
+                        (substring s (string-length (car m)))))]
 
       ;; identifiers
       [(regexp-match #px"^[A-Za-z][A-Za-z0-9_-]*" s)
        => (λ(m) (values (list 'ID (car m))
                         (substring s (string-length (car m)))))]
 
-      ;; single-character tokens
+      ;; single-char tokens
       [(char=? (string-ref s 0) #\+) (values 'PLUS (substring s 1))]
       [(char=? (string-ref s 0) #\-) (values 'MINUS (substring s 1))]
       [(char=? (string-ref s 0) #\*) (values 'MUL (substring s 1))]
@@ -124,22 +85,21 @@
       [(char=? (string-ref s 0) #\() (values 'LPAREN (substring s 1))]
       [(char=? (string-ref s 0) #\)) (values 'RPAREN (substring s 1))]
       [(char=? (string-ref s 0) #\;) (values 'SEMI (substring s 1))]
-      [else (error (format "Unknown token '~a' near line ~a"
-                           (substring s 0 1) current-line))]))
 
-  ;; tokenize full input
+      [else (error (format "Unknown token '~a' near line ~a" (substring s 0 1) current-line))]))
+
   (define (loop s acc)
     (define cleaned (clean s))
     (define-values (tok rest) (next-token cleaned))
-    (note-token-ending! tok)
     (if (eq? tok 'EOF)
         (reverse (cons 'EOF acc))
         (loop rest (cons tok acc))))
   (loop input '()))
 
 ;; -----------------------------
-;; PARSER UTILITIES
+;; PARSER CORE UTILITIES
 ;; -----------------------------
+
 (define (peek) (car tokens))
 (define (advance!) (set! tokens (cdr tokens)))
 
@@ -161,11 +121,14 @@
 ;; -----------------------------
 ;; GRAMMAR RULES
 ;; -----------------------------
+
+;; program -> stmt-list EOF
 (define (parse-program)
   (define tree (parse-stmt-list))
   (consume 'EOF)
   (list 'program tree))
 
+;; stmt-list -> stmt {; stmt}* | ε
 (define (parse-stmt-list)
   (cond
     [(member (peek) '(IF WHILE READ PRINT BEGIN))
@@ -179,16 +142,11 @@
     [else '()]))
 
 (define (parse-stmt-rest)
-  (cond
-    [(equal? (peek) 'SEMI)
-     (consume 'SEMI)
-     (parse-stmt-list)]
-    [(member (peek) '(IF WHILE READ PRINT BEGIN))
-     (parse-stmt-list)]
-    [(and (list? (peek)) (eq? (car (peek)) 'ID))
-     (parse-stmt-list)]
-    [else '()]))
+  (if (equal? (peek) 'SEMI)
+      (begin (consume 'SEMI) (parse-stmt-list))
+      '()))
 
+;; stmt -> if-stmt | while-stmt | assign-stmt | read-stmt | print-stmt | compound-stmt
 (define (parse-stmt)
   (match (peek)
     ['IF (parse-if-stmt)]
@@ -199,6 +157,7 @@
     [(list 'ID _) (parse-assign-stmt)]
     [else (syntax-error "statement" (peek))]))
 
+;; if-stmt -> if expr then begin stmt-list end [else begin stmt-list end]
 (define (parse-if-stmt)
   (consume 'IF)
   (define cond (parse-expr))
@@ -217,6 +176,7 @@
         '()))
   (list 'if cond then-part else-part))
 
+;; while-stmt -> while expr begin stmt-list end
 (define (parse-while-stmt)
   (consume 'WHILE)
   (define cond (parse-expr))
@@ -225,28 +185,33 @@
   (consume 'END)
   (list 'while cond body))
 
+;; assign-stmt -> id := expr
 (define (parse-assign-stmt)
   (define id (peek)) (advance!)
   (consume 'ASSIGN)
   (define e (parse-expr))
   (list 'assign id e))
 
+;; read-stmt -> read id
 (define (parse-read-stmt)
   (consume 'READ)
   (define id (peek)) (advance!)
   (list 'read id))
 
+;; print-stmt -> print expr
 (define (parse-print-stmt)
   (consume 'PRINT)
   (define e (parse-expr))
   (list 'print e))
 
+;; compound-stmt -> begin stmt-list end
 (define (parse-compound-stmt)
   (consume 'BEGIN)
   (define body (parse-stmt-list))
   (consume 'END)
   (list 'compound body))
 
+;; expr -> term + expr | term - expr | term comp-op term | term
 (define (parse-expr)
   (define t (parse-term))
   (cond
@@ -258,6 +223,7 @@
      (list 'comp t op t2)]
     [else t]))
 
+;; term -> factor * term | factor / term | factor
 (define (parse-term)
   (define f (parse-factor))
   (cond
@@ -265,18 +231,11 @@
     [(equal? (peek) 'DIV) (consume 'DIV) (list '/ f (parse-term))]
     [else f]))
 
+;; factor -> id | num | (expr)
 (define (parse-factor)
   (cond
-    [(equal? (peek) 'PLUS)
-     (consume 'PLUS)
-     (parse-factor)]
-    [(equal? (peek) 'MINUS)
-     (consume 'MINUS)
-     (list 'neg (parse-factor))]
-    [(and (list? (peek)) (eq? (car (peek)) 'ID))
-     (define v (peek)) (advance!) v]
-    [(and (list? (peek)) (eq? (car (peek)) 'NUM))
-     (define v (peek)) (advance!) v]
+    [(and (list? (peek)) (eq? (car (peek)) 'ID)) (define v (peek)) (advance!) v]
+    [(and (list? (peek)) (eq? (car (peek)) 'NUM)) (define v (peek)) (advance!) v]
     [(equal? (peek) 'LPAREN)
      (consume 'LPAREN)
      (define e (parse-expr))
@@ -292,6 +251,7 @@
                    (λ (ex)
                      (printf "~a\n" (exn-message ex))
                      (void))])
+    (set! current-line 1)
     (define in (open-input-file filename))
     (define src (port->string in))
     (close-input-port in)
@@ -301,14 +261,7 @@
     (pretty-print (parse-program))
     (void)))
 
-;; Example
-(parse "bad-comment-1.txt")
-(parse "bad-comment-2.txt")
-(parse "Correct01.txt")
-(parse "Correct02.txt")
-(parse "Correct03.txt")
-(parse "Correct04.txt")
-(parse "line-break-midstatement.txt")
-(parse "Mismatched-end.txt")
-(parse "Mismatched-parens.txt")
-(parse "scientific-notation.txt")
+;; -----------------------------
+;; Example use
+;; -----------------------------
+(parse "example.txt")
