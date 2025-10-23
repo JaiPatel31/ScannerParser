@@ -57,19 +57,24 @@
         [else str])))
 
   ;; remove /* ... */ comments, disallow nested or stray closers
-  (define (skip-comments s)
-    (cond
-      [(regexp-match #px"^/\\*" s)
-       (define end-pos (regexp-match-positions #px"\\*/" s))
-       (if end-pos
-           (let* ([pair (car end-pos)]
-                  [end (cdr pair)]
-                  [rest (substring s end)])
-             (skip-comments rest))
-           (error (format "Unterminated comment near line ~a" current-line)))]
-      [(regexp-match #px"^\\*/" s)
-       (error (format "Syntax error: stray comment close '*/' (line ~a)" current-line))]
-      [else s]))
+(define (skip-comments s)
+  (cond
+    ;; Opening /* ... */ comment
+    [(regexp-match #px"^/\\*" s)
+     (define end-pos (regexp-match-positions #px"\\*/" s))
+     (if end-pos
+         (let* ([pair (car end-pos)]
+                [end (cdr pair)]
+                [rest (substring s end)])
+           (skip-comments rest))
+         (syntax-error "comment close '*/'" "EOF"))]  ; use helper
+
+    ;; Stray */ without matching open
+    [(regexp-match #px"^\\*/" s)
+     (syntax-error "no prior comment open" "'*/'")]
+
+    [else s]))
+
 
   ;; recursively clean spaces and comments
   (define (clean s)
@@ -290,16 +295,22 @@
 (define (parse filename)
   (with-handlers ([exn:fail?
                    (λ (ex)
+                     ;; print error message only
                      (printf "~a\n" (exn-message ex))
                      (void))])
+    (set! current-line 1)
+    (set! last-token-ended-statement? #t)
     (define in (open-input-file filename))
     (define src (port->string in))
     (close-input-port in)
     (define toks (tokenize src))
     (set! tokens toks)
+    (define result (parse-program))
+    ;; if we got here, parsing succeeded
     (printf "Accept\n")
-    (pretty-print (parse-program))
+    (pretty-print result)
     (void)))
+
 
 ;; Example
 (parse "bad-comment-1.txt")
