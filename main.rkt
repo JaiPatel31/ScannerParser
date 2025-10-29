@@ -110,7 +110,6 @@
       ;; assignment
       [(regexp-match #px"^:=" s) => (λ(_) (values 'ASSIGN (regexp-replace #px"^:=" s "")))]
 
-;; numbers (integer, float, or scientific notation)
 ;; numbers (integer or decimal only, no scientific notation)
 [(regexp-match #px"^[0-9]+(\\.[0-9]+)?" s)
  => (λ(m)
